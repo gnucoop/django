@@ -2,8 +2,10 @@ import datetime
 import uuid
 from decimal import Decimal
 
+from django.contrib.postgres.fields.jsonb import KeyTransform
 from django.core import checks, exceptions, serializers
 from django.core.serializers.json import DjangoJSONEncoder
+from django.db.models import Sum
 from django.forms import CharField, Form, widgets
 from django.test.utils import isolate_apps
 from django.utils.html import escape
@@ -121,6 +123,9 @@ class TestQuerying(PostgreSQLTestCase):
                 'l': False,
             }),
             JSONModel.objects.create(field={'foo': 'bar'}),
+            JSONModel.objects.create(field=[{'state': 3}, {'state': 7}, {'state': 9}]),
+            JSONModel.objects.create(field=[{'state': 4}, {'state': 1}, {'state': 5}]),
+            JSONModel.objects.create(field=[{'state': 2}, {'state': 6}, {'state': 8}]),
         ]
 
     def test_exact(self):
@@ -159,6 +164,7 @@ class TestQuerying(PostgreSQLTestCase):
             [
                 (None,), (None,), (None,), (None,), (None,), (None,),
                 (None,), (None,), ('m',), (None,), (None,), (None,),
+                (None,), (None,), (None,),
             ]
         )
 
@@ -283,6 +289,29 @@ class TestQuerying(PostgreSQLTestCase):
 
     def test_iregex(self):
         self.assertTrue(JSONModel.objects.filter(field__foo__iregex=r'^bAr$').exists())
+
+    def test_keytransform(self):
+        self.assertSequenceEqual(
+            JSONModel.objects.annotate(history=KeyTransform('-1', 'field'))\
+                .annotate(last_state=KeyTransform('state', 'history'))\
+                .filter(last_state__isnull=False)
+                .values_list('last_state', flat=True),
+            [9, 5, 8]
+        )
+
+        self.assertEqual(
+            JSONModel.objects.annotate(history=KeyTransform('-1', 'field'))\
+                .annotate(last_state=KeyTransform('state', 'history'))\
+                .filter(last_state__gte=5).count(),
+            2
+        )
+
+        self.assertEqual(
+            JSONModel.objects.annotate(history=KeyTransform('-1', 'field'))\
+                .annotate(last_state=KeyTransform('state', 'history'))\
+                .filter(last_state__isnull=False).aggregate(Sum('last_state')),
+            22
+        )
 
 
 @isolate_apps('postgres_tests')
